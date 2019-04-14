@@ -4,14 +4,14 @@ import (
 	"context"
 )
 
-var stepAlignMiddleware = queryRangeMiddlewareFunc(func(next queryRangeHandler) queryRangeHandler {
-	return instrument("step_align").Wrap(stepAlign{
+var stepAlignMiddleware = queryRangeMiddlewareFunc(func(next QueryRangeHandler) QueryRangeHandler {
+	return stepAlign{
 		next: next,
-	})
+	}
 })
 
 type stepAlign struct {
-	next queryRangeHandler
+	next QueryRangeHandler
 }
 
 func (s stepAlign) Do(ctx context.Context, r *QueryRangeRequest) (*APIResponse, error) {

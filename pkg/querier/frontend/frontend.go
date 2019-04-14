@@ -12,12 +12,10 @@ import (
 	"time"
 
 	"github.com/NYTimes/gziphandler"
-	"github.com/cortexproject/cortex/pkg/util/validation"
 	"github.com/go-kit/kit/log"
 	"github.com/go-kit/kit/log/level"
-	opentracing "github.com/opentracing/opentracing-go"
+	"github.com/opentracing/opentracing-go"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/weaveworks/common/httpgrpc"
 	"github.com/weaveworks/common/httpgrpc/server"
@@ -25,25 +23,6 @@ import (
 )
 
 var (
-	queueDuration = promauto.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "cortex",
-		Name:      "query_frontend_queue_duration_seconds",
-		Help:      "Time spend by requests queued.",
-		Buckets:   prometheus.DefBuckets,
-	})
-	retries = promauto.NewHistogram(prometheus.HistogramOpts{
-		Namespace: "cortex",
-		Name:      "query_frontend_retries",
-		Help:      "Number of times a request is retried.",
-		Buckets:   []float64{0, 1, 2, 3, 4, 5},
-	})
-	queueLength = promauto.NewGauge(prometheus.GaugeOpts{
-		Namespace: "cortex",
-		Name:      "query_frontend_queue_length",
-		Help:      "Number of queries in the queue.",
-	})
-
-	errServerClosing  = httpgrpc.Errorf(http.StatusTeapot, "server closing down")
 	errTooManyRequest = httpgrpc.Errorf(http.StatusTooManyRequests, "too many outstanding requests")
 	errCanceled       = httpgrpc.Errorf(http.StatusInternalServerError, "context cancelled")
 )
@@ -56,7 +35,10 @@ type Config struct {
 	AlignQueriesWithStep    bool
 	CacheResults            bool
 	CompressResponses       bool
-	resultsCacheConfig
+	ResultsCacheConfig
+
+	// NOTE: I would consider separate Public Constructor for all middlewares rather, but not sure.
+	PreMiddlewares []QueryRangeMiddleware
 }
 
 // RegisterFlags adds the flags required to config this to the given FlagSet.
@@ -67,7 +49,7 @@ func (cfg *Config) RegisterFlags(f *flag.FlagSet) {
 	f.BoolVar(&cfg.AlignQueriesWithStep, "querier.align-querier-with-step", false, "Mutate incoming queries to align their start and end with their step.")
 	f.BoolVar(&cfg.CacheResults, "querier.cache-results", false, "Cache query results.")
 	f.BoolVar(&cfg.CompressResponses, "querier.compress-http-responses", false, "Compress HTTP responses.")
-	cfg.resultsCacheConfig.RegisterFlags(f)
+	cfg.ResultsCacheConfig.RegisterFlags(f)
 }
 
 // Frontend queues HTTP requests, dispatches them to backends, and handles retries
@@ -80,6 +62,7 @@ type Frontend struct {
 	mtx    sync.Mutex
 	cond   *sync.Cond
 	queues map[string]chan *request
+	metrics *metrics
 }
 
 type request struct {
@@ -92,28 +75,72 @@ type request struct {
 	response chan *ProcessResponse
 }
 
+type metrics struct {
+	queueDuration prometheus.Histogram
+	retries prometheus.Histogram
+	queueLength prometheus.Gauge
+	queryRangeDuration *prometheus.HistogramVec
+}
+
+func newMetrics(reg prometheus.Registerer) *metrics {
+	m := &metrics{
+		queueDuration: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "query_frontend_queue_duration_seconds",
+			Help:    "Time spend by requests queued.",
+			Buckets: prometheus.DefBuckets,
+		}),
+		retries: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "query_frontend_retries",
+			Help:    "Number of times a request is retried.",
+			Buckets: []float64{0, 1, 2, 3, 4, 5},
+		}),
+		queueLength: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "query_frontend_queue_length",
+			Help: "Number of queries in the queue.",
+		}),
+		queryRangeDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name:      "frontend_query_range_duration_seconds",
+		Help:      "Total time spent in seconds doing query range requests.",
+		Buckets:   prometheus.DefBuckets,
+	}, []string{"method", "status_code"}),
+	}
+
+	if reg != nil {
+		reg.MustRegister(m.queueDuration, m.retries, m.queueLength, m.queryRangeDuration)
+	}
+
+	return m
+}
+
+type Limits interface {
+	MaxQueryParallelism(string) int
+	MaxQueryLength(string) time.Duration
+}
+
 // New creates a new frontend.
-func New(cfg Config, log log.Logger, limits *validation.Overrides) (*Frontend, error) {
+// Used externally (not only by Cortex).
+func New(cfg Config, log log.Logger, reg prometheus.Registerer, limits Limits) (*Frontend, error) {
 	f := &Frontend{
 		cfg:    cfg,
 		log:    log,
 		queues: map[string]chan *request{},
+		metrics: newMetrics(reg),
 	}
 
 	// Stack up the pipeline of various query range middlewares.
-	queryRangeMiddleware := []queryRangeMiddleware{}
+	queryRangeMiddleware := cfg.PreMiddlewares
 	if cfg.AlignQueriesWithStep {
-		queryRangeMiddleware = append(queryRangeMiddleware, stepAlignMiddleware)
+		queryRangeMiddleware = append(queryRangeMiddleware, instrument("step_align", f.metrics.queryRangeDuration), stepAlignMiddleware)
 	}
 	if cfg.SplitQueriesByDay {
-		queryRangeMiddleware = append(queryRangeMiddleware, splitByDayMiddleware(limits))
+		queryRangeMiddleware = append(queryRangeMiddleware, instrument("split_by_day", f.metrics.queryRangeDuration), splitByDayMiddleware(limits))
 	}
 	if cfg.CacheResults {
-		queryCacheMiddleware, err := newResultsCacheMiddleware(cfg.resultsCacheConfig, limits)
+		queryCacheMiddleware, err := newResultsCacheMiddleware(cfg.ResultsCacheConfig, limits)
 		if err != nil {
 			return nil, err
 		}
-		queryRangeMiddleware = append(queryRangeMiddleware, instrument("results_cache"), queryCacheMiddleware)
+		queryRangeMiddleware = append(queryRangeMiddleware, instrument("results_cache", f.metrics.queryRangeDuration), queryCacheMiddleware)
 	}
 
 	// Finally, if the user selected any query range middleware, stitch it in.
@@ -131,6 +158,8 @@ func New(cfg Config, log log.Logger, limits *validation.Overrides) (*Frontend, e
 	f.cond = sync.NewCond(&f.mtx)
 	return f, nil
 }
+
+
 
 // Close stops new requests and errors out any pending requests.
 func (f *Frontend) Close() {
@@ -164,7 +193,7 @@ func (f *Frontend) handle(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
-// RoundTrip implement http.Transport.
+// RoundTrip implements http.Transport.
 func (f *Frontend) RoundTrip(r *http.Request) (*http.Response, error) {
 	req, err := server.HTTPRequest(r)
 	if err != nil {
@@ -198,7 +227,7 @@ func (c *httpgrpcHeadersCarrier) Set(key, val string) {
 	})
 }
 
-// RoundTripGRPC round trips a proto (instread of a HTTP request).
+// RoundTripGRPC round trips a proto.
 func (f *Frontend) RoundTripGRPC(ctx context.Context, req *ProcessRequest) (*ProcessResponse, error) {
 	// Propagate trace context in gRPC too - this will be ignored if using HTTP.
 	tracer, span := opentracing.GlobalTracer(), opentracing.SpanFromContext(ctx)
@@ -248,7 +277,7 @@ func (f *Frontend) RoundTripGRPC(ctx context.Context, req *ProcessRequest) (*Pro
 			continue
 		}
 
-		retries.Observe(float64(tries))
+		f.metrics.retries.Observe(float64(tries))
 
 		return resp, nil
 	}
@@ -360,7 +389,7 @@ func (f *Frontend) queueRequest(ctx context.Context, req *request) error {
 
 	select {
 	case queue <- req:
-		queueLength.Add(1)
+		f.metrics.queueLength.Add(1)
 		f.cond.Broadcast()
 		return nil
 	default:
@@ -397,8 +426,8 @@ func (f *Frontend) getNextRequest(ctx context.Context) (*request, error) {
 		// Tell close() we've processed a request.
 		f.cond.Broadcast()
 
-		queueDuration.Observe(time.Now().Sub(request.enqueueTime).Seconds())
-		queueLength.Add(-1)
+		f.metrics.queueDuration.Observe(time.Now().Sub(request.enqueueTime).Seconds())
+		f.metrics.queueLength.Add(-1)
 		request.queueSpan.Finish()
 
 		return request, nil

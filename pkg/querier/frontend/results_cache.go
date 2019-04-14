@@ -9,39 +9,38 @@ import (
 
 	"github.com/cortexproject/cortex/pkg/chunk/cache"
 	"github.com/cortexproject/cortex/pkg/util"
-	"github.com/cortexproject/cortex/pkg/util/validation"
 	"github.com/go-kit/kit/log/level"
 	"github.com/gogo/protobuf/proto"
-	opentracing "github.com/opentracing/opentracing-go"
+	"github.com/opentracing/opentracing-go"
 	otlog "github.com/opentracing/opentracing-go/log"
 	"github.com/prometheus/common/model"
 	"github.com/weaveworks/common/user"
 )
 
-type resultsCacheConfig struct {
-	cacheConfig       cache.Config
+type ResultsCacheConfig struct {
+	CacheConfig       cache.Config
 	MaxCacheFreshness time.Duration
 }
 
-func (cfg *resultsCacheConfig) RegisterFlags(f *flag.FlagSet) {
-	cfg.cacheConfig.RegisterFlagsWithPrefix("", "", f)
+func (cfg *ResultsCacheConfig) RegisterFlags(f *flag.FlagSet) {
+	cfg.CacheConfig.RegisterFlagsWithPrefix("", "", f)
 	f.DurationVar(&cfg.MaxCacheFreshness, "frontend.max-cache-freshness", 1*time.Minute, "Most recent allowed cacheable result, to prevent caching very recent results that might still be in flux.")
 }
 
 type resultsCache struct {
-	cfg    resultsCacheConfig
-	next   queryRangeHandler
+	cfg    ResultsCacheConfig
+	next   QueryRangeHandler
 	cache  cache.Cache
-	limits *validation.Overrides
+	limits Limits
 }
 
-func newResultsCacheMiddleware(cfg resultsCacheConfig, limits *validation.Overrides) (queryRangeMiddleware, error) {
-	c, err := cache.New(cfg.cacheConfig)
+func newResultsCacheMiddleware(cfg ResultsCacheConfig, limits Limits) (QueryRangeMiddleware, error) {
+	c, err := cache.New(cfg.CacheConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	return queryRangeMiddlewareFunc(func(next queryRangeHandler) queryRangeHandler {
+	return queryRangeMiddlewareFunc(func(next QueryRangeHandler) QueryRangeHandler {
 		return &resultsCache{
 			cfg:    cfg,
 			next:   next,

@@ -41,32 +41,32 @@ func (fn RoundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) 
 	return fn(req)
 }
 
-// queryRangeHandlerFunc is like http.HandlerFunc, but for queryRangeHandler.
-type queryRangeHandlerFunc func(context.Context, *QueryRangeRequest) (*APIResponse, error)
+// QueryRangeHandlerFunc is like http.HandlerFunc, but for QueryRangeHandler.
+type QueryRangeHandlerFunc func(context.Context, *QueryRangeRequest) (*APIResponse, error)
 
-func (q queryRangeHandlerFunc) Do(ctx context.Context, req *QueryRangeRequest) (*APIResponse, error) {
+func (q QueryRangeHandlerFunc) Do(ctx context.Context, req *QueryRangeRequest) (*APIResponse, error) {
 	return q(ctx, req)
 }
 
-type queryRangeHandler interface {
+type QueryRangeHandler interface {
 	Do(context.Context, *QueryRangeRequest) (*APIResponse, error)
 }
 
-// queryRangeMiddlewareFunc is like http.HandlerFunc, but for queryRangeMiddleware.
-type queryRangeMiddlewareFunc func(queryRangeHandler) queryRangeHandler
+// queryRangeMiddlewareFunc is like http.HandlerFunc, but for QueryRangeMiddleware.
+type queryRangeMiddlewareFunc func(QueryRangeHandler) QueryRangeHandler
 
-func (q queryRangeMiddlewareFunc) Wrap(h queryRangeHandler) queryRangeHandler {
+func (q queryRangeMiddlewareFunc) Wrap(h QueryRangeHandler) QueryRangeHandler {
 	return q(h)
 }
 
-type queryRangeMiddleware interface {
-	Wrap(queryRangeHandler) queryRangeHandler
+type QueryRangeMiddleware interface {
+	Wrap(QueryRangeHandler) QueryRangeHandler
 }
 
-// merge produces a middleware that applies multiple middlesware in turn;
+// merge produces a middleware that applies multiple middlewares in turn;
 // ie Merge(f,g,h).Wrap(handler) == f.Wrap(g.Wrap(h.Wrap(handler)))
-func merge(middlesware ...queryRangeMiddleware) queryRangeMiddleware {
-	return queryRangeMiddlewareFunc(func(next queryRangeHandler) queryRangeHandler {
+func merge(middlesware ...QueryRangeMiddleware) QueryRangeMiddleware {
+	return queryRangeMiddlewareFunc(func(next QueryRangeHandler) QueryRangeHandler {
 		for i := len(middlesware) - 1; i >= 0; i-- {
 			next = middlesware[i].Wrap(next)
 		}
@@ -76,8 +76,8 @@ func merge(middlesware ...queryRangeMiddleware) queryRangeMiddleware {
 
 type queryRangeRoundTripper struct {
 	next                 http.RoundTripper
-	queryRangeMiddleware queryRangeHandler
-	limits               *validation.Overrides
+	queryRangeMiddleware QueryRangeHandler
+	limits               Limits
 }
 
 func (q queryRangeRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {

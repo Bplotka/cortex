@@ -4,17 +4,16 @@ import (
 	"flag"
 	"os"
 
-	"github.com/cortexproject/cortex/pkg/util/validation"
-	"github.com/go-kit/kit/log/level"
-
-	"google.golang.org/grpc"
-
 	"github.com/cortexproject/cortex/pkg/querier/frontend"
 	"github.com/cortexproject/cortex/pkg/util"
 	"github.com/cortexproject/cortex/pkg/util/flagext"
+	"github.com/cortexproject/cortex/pkg/util/validation"
+	"github.com/go-kit/kit/log/level"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/weaveworks/common/middleware"
 	"github.com/weaveworks/common/server"
 	"github.com/weaveworks/common/tracing"
+	"google.golang.org/grpc"
 )
 
 func main() {
@@ -50,7 +49,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	f, err := frontend.New(frontendConfig, util.Logger, limits)
+	f, err := frontend.New(frontendConfig, util.Logger, prometheus.WrapRegistererWithPrefix("cortex_", prometheus.DefaultRegisterer), limits)
 	util.CheckFatal("initializing frontend", err)
 	defer f.Close()
 

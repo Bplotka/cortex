@@ -4,30 +4,23 @@ import (
 	"context"
 	"time"
 
-	"github.com/cortexproject/cortex/pkg/util/validation"
 	"github.com/weaveworks/common/user"
 )
 
 const millisecondPerDay = int64(24 * time.Hour / time.Millisecond)
 
-func splitByDayMiddleware(limits *validation.Overrides) queryRangeMiddleware {
-	return queryRangeMiddlewareFunc(func(next queryRangeHandler) queryRangeHandler {
-		return instrument("split_by_day").Wrap(splitByDay{
+func splitByDayMiddleware(limits Limits) QueryRangeMiddleware {
+	return queryRangeMiddlewareFunc(func(next QueryRangeHandler) QueryRangeHandler {
+		return splitByDay{
 			next:   next,
 			limits: limits,
-		})
+		}
 	})
 }
 
 type splitByDay struct {
-	next   queryRangeHandler
-	limits *validation.Overrides
-}
-
-type response struct {
-	req  QueryRangeRequest
-	resp *APIResponse
-	err  error
+	next   QueryRangeHandler
+	limits Limits
 }
 
 func (s splitByDay) Do(ctx context.Context, r *QueryRangeRequest) (*APIResponse, error) {
@@ -49,7 +42,7 @@ func (s splitByDay) Do(ctx context.Context, r *QueryRangeRequest) (*APIResponse,
 }
 
 func splitQuery(r *QueryRangeRequest) []*QueryRangeRequest {
-	reqs := []*QueryRangeRequest{}
+	var reqs []*QueryRangeRequest
 	for start := r.Start; start < r.End; start = nextDayBoundary(start, r.Step) + r.Step {
 		end := nextDayBoundary(start, r.Step)
 		if end+r.Step >= r.End {
@@ -83,7 +76,7 @@ type requestResponse struct {
 	resp *APIResponse
 }
 
-func doRequests(ctx context.Context, downstream queryRangeHandler, reqs []*QueryRangeRequest, limits *validation.Overrides) ([]requestResponse, error) {
+func doRequests(ctx context.Context, downstream QueryRangeHandler, reqs []*QueryRangeRequest, limits Limits) ([]requestResponse, error) {
 	userid, err := user.ExtractOrgID(ctx)
 	if err != nil {
 		return nil, err

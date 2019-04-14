@@ -167,8 +167,8 @@ func defaultOverrides(t *testing.T) *validation.Overrides {
 func TestResultsCache(t *testing.T) {
 	calls := 0
 	rcm, err := newResultsCacheMiddleware(
-		resultsCacheConfig{
-			cacheConfig: cache.Config{
+		ResultsCacheConfig{
+			CacheConfig: cache.Config{
 				Cache: cache.NewMockCache(),
 			},
 		},
@@ -176,7 +176,7 @@ func TestResultsCache(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	rc := rcm.Wrap(queryRangeHandlerFunc(func(_ context.Context, req *QueryRangeRequest) (*APIResponse, error) {
+	rc := rcm.Wrap(QueryRangeHandlerFunc(func(_ context.Context, req *QueryRangeRequest) (*APIResponse, error) {
 		calls++
 		return parsedResponse, nil
 	}))
@@ -201,9 +201,9 @@ func TestResultsCache(t *testing.T) {
 }
 
 func TestResultsCacheRecent(t *testing.T) {
-	var cfg resultsCacheConfig
+	var cfg ResultsCacheConfig
 	flagext.DefaultValues(&cfg)
-	cfg.cacheConfig.Cache = cache.NewMockCache()
+	cfg.CacheConfig.Cache = cache.NewMockCache()
 	rcm, err := newResultsCacheMiddleware(cfg, defaultOverrides(t))
 	require.NoError(t, err)
 
@@ -212,7 +212,7 @@ func TestResultsCacheRecent(t *testing.T) {
 	req.Start = req.End - (60 * 1e3)
 
 	calls := 0
-	rc := rcm.Wrap(queryRangeHandlerFunc(func(_ context.Context, r *QueryRangeRequest) (*APIResponse, error) {
+	rc := rcm.Wrap(QueryRangeHandlerFunc(func(_ context.Context, r *QueryRangeRequest) (*APIResponse, error) {
 		calls++
 		assert.Equal(t, r, &req)
 		return parsedResponse, nil
