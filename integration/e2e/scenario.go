@@ -20,8 +20,8 @@ type Service interface {
 	WaitReady() error
 
 	// It should be ok to Stop and Kill more than once, with next invokes being noop.
-	Kill(networkName string) error
-	Stop(networkName string) error
+	Kill() error
+	Stop() error
 }
 
 type Scenario struct {
@@ -61,6 +61,11 @@ func NewScenario(networkName string) (*Scenario, error) {
 // SharedDir returns the absolute path of the directory on the host that is shared with all services in docker.
 func (s *Scenario) SharedDir() string {
 	return s.sharedDir
+}
+
+// NetworkName returns the network name that scenario is responsible for.
+func (s *Scenario) NetworkName() string {
+	return s.networkName
 }
 
 func (s *Scenario) isRegistered(name string) bool {
@@ -106,7 +111,7 @@ func (s *Scenario) Stop(services ...Service) error {
 		if !s.isRegistered(service.Name()) {
 			return fmt.Errorf("unable to stop service %s because it does not exist", service.Name())
 		}
-		if err := service.Stop(s.networkName); err != nil {
+		if err := service.Stop(); err != nil {
 			return err
 		}
 
@@ -151,7 +156,7 @@ func (s *Scenario) clean() {
 func (s *Scenario) shutdown() {
 	// Kill the services in the opposite order.
 	for i := len(s.services) - 1; i >= 0; i-- {
-		if err := s.services[i].Kill(s.networkName); err != nil {
+		if err := s.services[i].Kill(); err != nil {
 			fmt.Println("Unable to kill service", s.services[i].Name(), ":", err.Error())
 		}
 	}
